@@ -42,10 +42,14 @@ const merge=l=>{l.sort((a,b)=>a[0]-b[0]);const m=[];for(const b of l){const x=m[
 
    The gap was a booking cadence, not a statement about availability. Cadence
    belongs at the moment of booking, not in what the calendar claims is free. */
+/* The whole day is free unless something is booked in it. Availability used to
+   be clipped to each advisor's configured window, which made most of the board
+   unbookable for a reason the RM cannot see and does not care about: if the
+   advisor has nothing at 7pm, 7pm can be offered. Time Slot Config still
+   decides which DAYS an advisor works; it no longer fences the hours. */
 function freeBands(id,date){
-  const c=cfgOf(id);
   if(!worksOn(id,date))return [];
-  let open=[[c.from,c.to]];
+  let open=[[B.GRID_START,B.GRID_END]];
   if(date===B.TODAY){
     const floor=B.NOW_MIN+30;                 // no booking into the next half hour
     open=open.map(b=>[Math.max(b[0],floor),b[1]]).filter(b=>b[1]>b[0]);
@@ -72,6 +76,12 @@ const MIN_BOOKABLE=15;
 /* Clicking a band books from where the pointer landed, snapped to the quarter
    hour, which is how a calendar behaves. */
 const SNAP=15;
+/* What a click books before the agenda is chosen. */
+const DEFAULT_LEN=30;
+/* Free time is a duration now, not a tally. There are no discrete slots to
+   count: any length can start anywhere free, so "6 open" answered a question
+   nobody can act on. Hours free is the fact an RM can actually use. */
+const fmtDur=m=>m<=0?'\u2014':m<60?m+'m':(m%60?Math.floor(m/60)+'h '+(m%60)+'m':(m/60)+'h');
 const snap=m=>Math.round(m/SNAP)*SNAP;
 
 /* ---------------------------------------------------------------- the top menu -- */
@@ -132,30 +142,22 @@ function ScheduleMeetings({appts,tweaks,onQuickBook,team,roster}){
   const freeOn=(id,d)=>subtract(freeBands(id,d),blocksFor(id,d));
   /* "Open" counts how many calls of this advisor's usual length still fit, so
      the number means something next to a band that is hours long. */
-  const openSlots=(id,d)=>{
-    const len=cfgOf(id).len;
-    return freeOn(id,d).reduce((a,[s,e])=>{
-      const n=Math.floor((e-s)/len);
-      for(let k=0;k<n;k++)a.push([s+k*len,s+(k+1)*len]);
-      return a;
-    },[]);
-  };
-  const openOn=d=>shown.reduce((n,a)=>n+openSlots(a.id,d).length,0);
+  const freeMins=(id,d)=>freeOn(id,d).reduce((n,[s,e])=>n+(e-s),0);
+  const freeOnDay=d=>shown.reduce((n,a)=>n+freeMins(a.id,d),0);
 
   React.useEffect(()=>{
     if(!ids.length)return;
-    if(openOn(date)>0&&days.includes(date))return;
-    const better=days.find(d=>openOn(d)>0);
+    if(freeOnDay(date)>0&&days.includes(date))return;
+    const better=days.find(d=>freeOnDay(d)>0);
     if(better)setDate(better);
   },[ids.join(','),offset]);
 
   /* The rail is a ranking, not a roster: what is open on this date decides the order. */
   const ranked=ROSTER
-    .map(a=>({a,open:openSlots(a.id,date).length,clients:clientsOf(a.id).length}))
+    .map(a=>({a,open:freeMins(a.id,date),clients:clientsOf(a.id).length}))
     .filter(r=>{
       if(filter==='Tax'&&!/^Tax/.test(r.a.role))return false;
       if(filter==='Wealth'&&!/Wealth/.test(r.a.role))return false;
-      if(filter==='Open'&&!r.open)return false;
       const s=q.trim().toLowerCase();
       return !s||r.a.name.toLowerCase().includes(s)||r.a.role.toLowerCase().includes(s);
     })
@@ -163,23 +165,22 @@ function ScheduleMeetings({appts,tweaks,onQuickBook,team,roster}){
 
   const counts={All:ROSTER.length,
     Tax:ROSTER.filter(a=>/^Tax/.test(a.role)).length,
-    Wealth:ROSTER.filter(a=>/Wealth/.test(a.role)).length,
-    Open:ROSTER.filter(a=>openSlots(a.id,date).length).length};
+    Wealth:ROSTER.filter(a=>/Wealth/.test(a.role)).length};
 
   const toggle=id=>setIds(x=>x.includes(id)?x.filter(i=>i!==id):[...x,id]);
 
   const nextFree=id=>{
     for(const d of days){
       if(d<date)continue;
-      const s=openSlots(id,d);
-      if(s.length)return {date:d,start:s[0][0]};
+      const bands=freeOn(id,d);
+      if(bands.length)return {date:d,start:bands[0][0]};
     }
     return null;
   };
 
   const cols='54px repeat('+Math.max(shown.length,1)+',minmax(0,1fr))';
   const nowVisible=date===B.TODAY&&B.NOW_MIN>B.GRID_START&&B.NOW_MIN<B.GRID_END;
-  const total=openOn(date);
+  const total=freeOnDay(date);
 
   return <div>
     <div className="ptitle">
@@ -195,7 +196,7 @@ function ScheduleMeetings({appts,tweaks,onQuickBook,team,roster}){
       </div>
       {!!shown.length&&<span style={{background:'var(--green-soft)',color:'var(--green-deep)',
         border:'1px solid #bfe3cb',borderRadius:20,padding:'7px 13px',fontSize:12.5,fontWeight:700}}>
-        {shown.length} selected &middot; {total} open on {B.fmtD(date)}</span>}
+        {shown.length} selected &middot; {fmtDur(total)} free on {B.fmtD(date)}</span>}
     </div>
 
     {/* One screen: the roster stays beside the calendar, so adding or dropping an
@@ -219,13 +220,13 @@ function ScheduleMeetings({appts,tweaks,onQuickBook,team,roster}){
             Choose the call type above, then pick who it is with.
           </div>}
           <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
-            {['All','Tax','Wealth','Open'].map(f=><button key={f} type="button" onClick={()=>setFilter(f)}
+            {['All','Tax','Wealth'].map(f=><button key={f} type="button" onClick={()=>setFilter(f)}
               style={{padding:'4px 9px',borderRadius:20,cursor:'pointer',font:'inherit',fontSize:11.5,
                 fontWeight:filter===f?700:600,
                 border:'1px solid '+(filter===f?'var(--navy)':'var(--border)'),
                 background:filter===f?'var(--tint)':'var(--surface)',
                 color:filter===f?'var(--navy-deep)':'var(--ink-2)'}}>
-              {f==='Open'?'Open now':f} {counts[f]}
+              {f} {counts[f]}
             </button>)}
           </div>
         </div>
@@ -247,8 +248,8 @@ function ScheduleMeetings({appts,tweaks,onQuickBook,team,roster}){
               </span>
               {/* Availability is answered after you pick who the call is with,
                   not advertised against every name before you have chosen. */}
-              {on&&<span style={{flex:'none',fontFamily:'var(--mono)',fontSize:13,fontWeight:600,
-                color:open?'var(--green-deep)':'var(--ink-3)'}}>{open}</span>}
+              {on&&<span style={{flex:'none',fontFamily:'var(--mono)',fontSize:11.5,fontWeight:600,
+                color:open?'var(--green-deep)':'var(--ink-3)'}}>{fmtDur(open)}</span>}
             </label>;
           })}
           {!ranked.length&&<div className="muted" style={{padding:'14px 8px',fontSize:12}}>No advisor matches that.</div>}
@@ -267,13 +268,13 @@ function ScheduleMeetings({appts,tweaks,onQuickBook,team,roster}){
             <div className="days">
               {days.map(d=>{
                 const works=shown.length?shown.some(a=>worksOn(a.id,d)):true;
-                const n=works?openOn(d):0;
+                const n=works?freeOnDay(d):0;
                 return <button key={d} className={'dchip'+(d===date?' on':'')+(works?'':' off')+(d===B.TODAY?' today':'')}
                   onClick={()=>works&&setDate(d)} disabled={!works}>
                   <div className="w">{B.fmtD(d,{weekday:'short',day:undefined,month:undefined})}</div>
                   <div className="d">{new Date(d+'T12:00:00+05:30').getDate()}</div>
                   <div className={'c '+(n?'some':'none')}>
-                    {!shown.length?'\u2014':works?(n?n+' open':'none'):'off'}
+                    {!shown.length?'\u2014':works?(n?fmtDur(n)+' free':'none'):'off'}
                   </div>
                 </button>;
               })}
@@ -282,16 +283,16 @@ function ScheduleMeetings({appts,tweaks,onQuickBook,team,roster}){
           </div>
 
           {!ready
-            ? <EmptyState>Choose what kind of call this is. Slot lengths follow the type.</EmptyState>
+            ? <EmptyState>Tick an advisor on the left. Columns appear here as you do.</EmptyState>
             : !shown.length
             ? <EmptyState>Tick an advisor on the left. Columns appear here as you do.</EmptyState>
             : <React.Fragment>
             <div className="ghead" style={{gridTemplateColumns:cols}}>
               <div/>
-              {shown.map(a=>{const n=openSlots(a.id,date).length;return <div key={a.id}>
+              {shown.map(a=>{const n=freeMins(a.id,date);return <div key={a.id}>
                 <Avatar name={a.name} size={18} style={{fontSize:8}}/>
                 <span className="gn">{a.name}</span>
-                <span style={{color:n?'var(--green-deep)':'var(--ink-3)'}}>{n}</span>
+                <span style={{color:n?'var(--green-deep)':'var(--ink-3)'}}>{fmtDur(n)}</span>
                 <button type="button" onClick={()=>toggle(a.id)} aria-label={'Remove '+a.name}
                   style={{border:0,background:'none',padding:0,marginLeft:2,color:'var(--ink-3)',cursor:'pointer',display:'flex'}}>
                   <Icon name="x" size={12}/>
@@ -305,14 +306,14 @@ function ScheduleMeetings({appts,tweaks,onQuickBook,team,roster}){
                   {hours.map(h=><span key={h} className="hl" style={{top:y(h)}}>{B.fmtT(h).replace(':00','')}</span>)}
                 </div>
                 {shown.map(a=>{
-                  const c=cfgOf(a.id),on=worksOn(a.id,date);
-                  const off=on?[[B.GRID_START,c.from],[c.to,B.GRID_END]]:[[B.GRID_START,B.GRID_END]];
+                  const on=worksOn(a.id,date);
+                  const off=on?[]:[[B.GRID_START,B.GRID_END]];
                   return <div className="gcol" key={a.id}>
                     {hours.map(h=><div key={h} className="hline" style={{top:y(h)}}/>)}
                     {off.map(o=>o[1]>o[0]&&<div key={o[0]} className="offhrs" style={{top:y(o[0]),height:y(o[1])-y(o[0])}}/>)}
-                    {!on&&<div className="busy" style={{top:y(c.from),height:26,background:'transparent',border:0}}>Not scheduled</div>}
-                    {on&&blocksFor(a.id,date).filter(b=>b[1]>c.from&&b[0]<c.to).map(b=>{
-                      const s=Math.max(b[0],c.from),e=Math.min(b[1],c.to);
+                    {!on&&<div className="busy" style={{top:y(B.DAY_START),height:26,background:'transparent',border:0}}>Not scheduled</div>}
+                    {on&&blocksFor(a.id,date).filter(b=>b[1]>B.GRID_START&&b[0]<B.GRID_END).map(b=>{
+                      const s=Math.max(b[0],B.GRID_START),e=Math.min(b[1],B.GRID_END);
                       return <button key={b[0]} className="busy" type="button"
                         onClick={()=>setBlocked({advisor:a,block:[s,e]})}
                         style={{top:y(s),height:Math.max(y(e)-y(s),16),cursor:'not-allowed',textAlign:'left',
@@ -328,7 +329,7 @@ function ScheduleMeetings({appts,tweaks,onQuickBook,team,roster}){
                         onClick={ev=>{
                           const r=ev.currentTarget.getBoundingClientRect();
                           const at=Math.min(Math.max(snap(bs+(ev.clientY-r.top)/PXM),bs),be-MIN_BOOKABLE);
-                          setPick({advisor:a,start:at,end:Math.min(at+cfgOf(a.id).len,be)});
+                          setPick({advisor:a,start:at,end:Math.min(at+DEFAULT_LEN,be),band:[bs,be]});
                         }}
                         title={'Free ' + B.fmtT(bs) + ' – ' + B.fmtT(be) + ' · click where the call should start'}>
                         <span>{B.fmtT(bs)} &ndash; {B.fmtT(be)} free</span>
@@ -343,8 +344,8 @@ function ScheduleMeetings({appts,tweaks,onQuickBook,team,roster}){
             <div className="legend">
               <span><i style={{background:'var(--green-soft)',border:'1px solid #bfe3cb'}}/>Free &mdash; click anywhere to book</span>
               <span><i style={{background:'var(--surface-2)',border:'1px solid var(--border-2)'}}/>Busy &mdash; not bookable</span>
-              <span><i style={{background:'repeating-linear-gradient(135deg,var(--surface-2) 0 6px,var(--surface-3) 6px 12px)'}}/>Outside their hours</span>
-              <span style={{marginLeft:'auto'}}>Working hours from each advisor&rsquo;s Time Slot Config &middot; IST</span>
+              <span><i style={{background:'repeating-linear-gradient(135deg,var(--surface-2) 0 6px,var(--surface-3) 6px 12px)'}}/>Day off</span>
+              <span style={{marginLeft:'auto'}}>Working days from each advisor&rsquo;s Time Slot Config &middot; IST</span>
             </div>
           </React.Fragment>}
         </React.Fragment>}
@@ -390,10 +391,28 @@ const SHOW=8;
    Order follows how the work actually goes — slot first, off the board, then
    what the call is for, then who it is with. */
 function BookingPanel({pick,date,tweaks,busy,onClose,onBook}){
-  const {advisor,start}=pick;
+  const {advisor,band}=pick;
+  /* The click lands somewhere inside a free stretch, which is a guess at where
+     the call should sit. Both ends are editable here: start moves within the
+     band, length decides the end. */
+  const [start,setStart]=React.useState(pick.start);
   const DEFAULT_TYPE=B.CONSULT_TYPES[0];
   const [ctype,setCtype]=React.useState(DEFAULT_TYPE);
-  const [durOverride,setDurOverride]=React.useState(null);
+  /* Opens at the length the click booked, not the agenda's. The RM picked a
+     bracket off the board; the panel should show that bracket back. Choosing
+     an agenda then sets its own default, and the length control overrides
+     either — the start never moves, only the end. */
+  const [durOverride,setDurOverride]=React.useState(pick.end-pick.start);
+  /* Every quarter hour in the band that still leaves room for this call. */
+  const startOptions=React.useMemo(()=>{
+    const [bs,be]=band||[pick.start,pick.end];
+    /* On the clock, not on the band: a band starting at 12:10 was offering
+       12:10, 12:25, 12:40 — quarter hours measured from the wrong zero. */
+    const out=[];
+    for(let t=Math.ceil(bs/SNAP)*SNAP;t<=be-SNAP;t+=SNAP)out.push(t);
+    if(!out.includes(pick.start))out.push(pick.start);
+    return out.sort((a,b)=>a-b);
+  },[band,pick.start,pick.end]);
   const [customOpen,setCustomOpen]=React.useState(false);
   const [customVal,setCustomVal]=React.useState('');
   const [q,setQ]=React.useState('');
@@ -409,12 +428,15 @@ function BookingPanel({pick,date,tweaks,busy,onClose,onBook}){
   const opts=B.DURATIONS.includes(dur)?B.DURATIONS:B.DURATIONS.concat([dur]).sort((a,b)=>a-b);
   const durLabel=m=>m%60===0&&m>=60?(m/60)+(m===60?' hour':' hours'):m+' minutes';
 
-  /* A longer call can run into something already on the calendar, so the
-     length is checked against the slot rather than assumed to fit. */
-  const cfg=cfgOf(advisor.id);
-  const overruns=end>cfg.to;
+  /* The end follows the length: pick 12:00 at 30 minutes and it reads 12:00 to
+     12:30; change to 45 and it becomes 12:00 to 12:45. The start is what the
+     RM chose, so it holds. Only a real obstruction stops it. */
+  const overruns=end>B.GRID_END;
   const clash=(busy||[]).some(b=>B.overlaps(b,[start,end]));
   const fits=!overruns&&!clash;
+  /* When it does clash, say how much room there actually is. */
+  const nextBusy=(busy||[]).filter(b=>b[0]>=start).sort((a,b)=>a[0]-b[0])[0];
+  const room=nextBusy?nextBusy[0]-start:B.GRID_END-start;
 
   /* Typeahead over the advisor's book first, then everyone — name, phone or
      email, which is how an RM actually remembers a client. */
@@ -463,6 +485,13 @@ function BookingPanel({pick,date,tweaks,busy,onClose,onBook}){
       </div>
 
       <div className="bk-body">
+        <Field label="Starts">
+          <Input as="select" value={String(start)}
+            onChange={e=>setStart(Number(e.target.value))}>
+            {startOptions.map(t=><option key={t} value={t}>{B.fmtT(t)}</option>)}
+          </Input>
+        </Field>
+
         <Field label="Agenda">
           <Input as="select" value={ctype}
             onChange={e=>{setCtype(e.target.value);setDurOverride(null);setCustomOpen(false);}}>
@@ -491,8 +520,9 @@ function BookingPanel({pick,date,tweaks,busy,onClose,onBook}){
               </Input>}
           {!fits&&<div className="pc-note warn" style={{marginTop:8}}>
             {overruns
-              ?advisor.name.split(' ')[0]+' finishes at '+B.fmtT(cfg.to)+', so a '+dur+'-minute call does not fit here.'
-              :'A '+dur+'-minute call runs into something already booked. Shorten it or pick another slot.'}
+              ?'A '+dur+'-minute call from '+B.fmtT(start)+' runs past the end of the day.'
+              :'Only '+room+' minutes are free from '+B.fmtT(start)+' \u2014 '+advisor.name.split(' ')[0]
+                +' is booked at '+B.fmtT(nextBusy[0])+'. Shorten it, or start earlier.'}
           </div>}
         </Field>
 
@@ -510,13 +540,11 @@ function BookingPanel({pick,date,tweaks,busy,onClose,onBook}){
                 <SearchInput value={q} onChange={setQ} placeholder="Search by name, phone or email"/>
                 {term&&<div className="bk-res" style={{marginTop:8}}>
                   {hits.length?hits.map(u=>
+                    /* The name is the answer. Phone and email are how you
+                       search, not what you read back. */
                     <div key={u.id} className="dd-item" onClick={()=>{setClient(u);setQ('');}}>
                       <Avatar name={u.name} size={24}/>
-                      <div style={{flex:1,minWidth:0}}>
-                        <div style={{fontWeight:600}}>{u.name}
-                          {mine.includes(u)&&<span className="lbl" style={{marginLeft:6}}>their client</span>}</div>
-                        <div className="r">{u.phone} &middot; {u.email}</div>
-                      </div>
+                      <div style={{flex:1,minWidth:0,fontWeight:600}}>{u.name}</div>
                     </div>)
                     :<div className="dd-item" style={{color:'var(--ink-3)'}}>No client matches &ldquo;{q.trim()}&rdquo;.</div>}
                 </div>}
@@ -544,8 +572,7 @@ function BookingPanel({pick,date,tweaks,busy,onClose,onBook}){
 
       <div className="bk-foot">
         <Button variant="ghost" onClick={onClose}>Cancel</Button>
-        <Button onClick={submit} disabled={!client||!fits}>
-          {client?'Review invite':'Choose a client'}</Button>
+        <Button onClick={submit} disabled={!client||!fits}>Save</Button>
       </div>
     </aside>
   </React.Fragment>;
