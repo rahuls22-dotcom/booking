@@ -301,3 +301,8 @@ textarea.pc-input.mbody{background:#fff;min-height:260px;font-size:14px;line-hei
 .slot.free{align-items:flex-start;justify-content:flex-start;padding:3px 8px;text-align:left}
 .slot.free span{font-size:10.5px;font-weight:600;line-height:1.2}
 .slot.free:hover{background:#d8f0e0;border-color:#8fcda4}
+
+/* The week's month and year, beside the day chips. Without it a strip of
+   weekday + date reads identically in any month of any year. */
+.dstrip .dmonth{flex:none;min-width:132px;font-size:12.5px;font-weight:700;
+  color:var(--ink);letter-spacing:.01em;padding-right:4px}

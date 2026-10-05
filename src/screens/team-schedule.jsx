@@ -178,6 +178,18 @@ function ScheduleMeetings({appts,tweaks,onQuickBook,team,roster}){
     return null;
   };
 
+  /* The chips carry a weekday and a number and nothing else, so a week read
+     the same in any month of any year. Name the week above them, and say both
+     months when it straddles one. */
+  const mon=d=>new Date(d+'T12:00:00+05:30').toLocaleDateString('en-IN',{month:'long'});
+  const yr=d=>new Date(d+'T12:00:00+05:30').getFullYear();
+  const first=days[0], last=days[days.length-1];
+  const weekLabel=mon(first)===mon(last)
+    ? mon(first)+' '+yr(first)
+    : yr(first)===yr(last)
+      ? mon(first)+' \u2013 '+mon(last)+' '+yr(last)
+      : mon(first)+' '+yr(first)+' \u2013 '+mon(last)+' '+yr(last);
+
   const cols='54px repeat('+Math.max(shown.length,1)+',minmax(0,1fr))';
   const nowVisible=date===B.TODAY&&B.NOW_MIN>B.GRID_START&&B.NOW_MIN<B.GRID_END;
   const total=freeOnDay(date);
@@ -264,6 +276,7 @@ function ScheduleMeetings({appts,tweaks,onQuickBook,team,roster}){
           : <React.Fragment>
 
           <div className="dstrip">
+            <span className="dmonth">{weekLabel}</span>
             <button className="navbtn" onClick={()=>setOffset(o=>o-1)} disabled={offset<=0} aria-label="Previous week">&lsaquo;</button>
             <div className="days">
               {days.map(d=>{
