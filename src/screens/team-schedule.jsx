@@ -495,7 +495,12 @@ function BookingPanel({pick,date,tweaks,busy,onClose,onBook}){
         <Field label="Agenda">
           <Input as="select" value={ctype}
             onChange={e=>{setCtype(e.target.value);setDurOverride(null);setCustomOpen(false);}}>
-            {B.CONSULT_TYPES.map(x=><option key={x} value={x}>{x} &middot; {B.durFor(x)} min</option>)}
+            {/* The agenda's own name, nothing else. Printing its default length
+                here put a number on screen that Length could contradict: an
+                agenda reading "15 min" above a Length reading 30. The default
+                is backend knowledge; Length is where it shows, and Length is
+                what gets booked. */}
+            {B.CONSULT_TYPES.map(x=><option key={x} value={x}>{x}</option>)}
           </Input>
         </Field>
 
